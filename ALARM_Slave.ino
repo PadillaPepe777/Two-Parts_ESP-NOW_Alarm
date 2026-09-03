@@ -6,8 +6,24 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SH110X.h>
 
-#define ALARM_START 26
-#define Buzzer 23
+#include "denden_esperando.h"
+#include "driver/dac.h"
+
+#define DAC_PIN 26
+#define DAC_CHANNEL DAC_CHANNEL_2   // GPIO26
+
+#define AUDIO_SAMPLE_RATE 16000
+#define WAV_HEADER_SIZE 44
+
+bool detenerAudio = false;
+
+uint32_t audioIndex = WAV_HEADER_SIZE;
+uint32_t siguienteMuestra = 0;
+
+bool audioReproduciendo = false;
+
+#define ALARM_START 13 // cambiar por 0, 2, 4, 12-15, 25-27, 32-39;
+#define Buzzer 23 //cambiar por 26
 //SDA 21 SCL 22
 #define uS_TO_S_FACTOR 1000000ULL      
 
@@ -27,6 +43,7 @@ void OnDataRecv(const esp_now_recv_info_t * recv_info,
 
   if (datoRecibido) {
     Serial.println("¡Recibido!");
+    detenerAudio=true;
   }
 }
 
@@ -54,6 +71,156 @@ bool ultimoCLK = true;
 String Arriba, Abajo;
 
 esp_sleep_wakeup_cause_t wakeup_reason;
+
+void displaySetting()
+{
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setTextColor(SH110X_WHITE);
+  display.setCursor(0,0);
+  display.println("TIEMPO DE ALARMA:");
+  display.setCursor(0,32);
+  if(Minutos/10.0>=1.0)
+  display.println(String(Horas)+":"+String(Minutos));
+  else
+  display.println(String(Horas)+":0"+String(Minutos));
+  display.display();
+}
+
+void normalTime(){
+  if(Minutos>=60)
+  {
+    Horas++;
+    Minutos=Minutos-60;
+  }
+
+  if(Minutos<0 && Horas>=1)
+  {
+    Minutos=59;
+    Horas--;
+  }
+
+  if(Horas<0)
+  Horas=0;
+  if(Horas>23)
+  Horas=23;
+          
+  if(Minutos<=0 && Horas<=0)
+  Minutos=1;
+  }
+
+  void sumar(){
+    if(ModoHora)
+    Horas=Horas+cambio;
+    else
+    Minutos=Minutos+cambio;
+  }
+
+    void restar(){
+    if(ModoHora)
+    Horas--;
+    else
+    Minutos--;
+  }
+
+  void displayText()
+{
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setTextColor(SH110X_WHITE);
+  display.setCursor(10,0);
+  display.println(Arriba);
+  display.setCursor(10,32);
+  display.println(Abajo);
+  display.display();
+}
+
+int leerEncoder()
+{
+
+  int clk = digitalRead(OUTA);
+
+  if(clk != ultimoCLK)
+  {
+
+      ultimoCLK = clk;
+      if(digitalRead(OUTB)!=clk)
+        return -1;
+      else
+        return 1;
+    
+  }
+  ultimoCLK = clk;
+  return 0;
+}
+
+void iniciarDAC()
+{
+    dac_output_enable(DAC_CHANNEL);
+
+    // 128 = punto medio / silencio para el DAC
+    dac_output_voltage(DAC_CHANNEL, 128);
+
+    audioIndex = WAV_HEADER_SIZE;
+    siguienteMuestra = micros();
+
+    audioReproduciendo = true;
+}
+
+
+void reproducirAudio()
+{
+    if (!audioReproduciendo)
+        return;
+
+    if (detenerAudio)
+    {
+        detenerAudio = false;
+        audioReproduciendo = false;
+
+        // Silencio
+        dac_output_voltage(DAC_CHANNEL, 128);
+
+        Serial.println("Audio detenido");
+
+        return;
+    }
+
+    uint32_t ahora = micros();
+
+    if ((int32_t)(ahora - siguienteMuestra) >= 0)
+    {
+        siguienteMuestra += 1000000UL / AUDIO_SAMPLE_RATE;
+
+        // Si llegamos al final del WAV, comenzar nuevamente
+        if (audioIndex + 1 >= denden_esperando_wav_len)
+        {
+            audioIndex = WAV_HEADER_SIZE;
+        }
+
+        // WAV = little endian, 16 bits
+        int16_t muestra =
+            (int16_t)(
+                denden_esperando_wav[audioIndex] |
+                (denden_esperando_wav[audioIndex + 1] << 8)
+            );
+
+        audioIndex += 2;
+
+        // Convertir:
+        //
+        // 16-bit signed:
+        // -32768 ... 0 ... +32767
+        //
+        // DAC 8-bit:
+        // 0 ... 128 ... 255
+
+        uint8_t salidaDAC =
+            (uint16_t)(muestra + 32768) >> 8;
+
+        dac_output_voltage(DAC_CHANNEL, salidaDAC);
+    }
+}
 
 void setup() {
   Serial.begin(115200);
@@ -104,11 +271,16 @@ delay(100);
   esp_now_register_recv_cb(OnDataRecv);
 
   //esp_sleep_enable_timer_wakeup((uint64_t)TIME_TO_SLEEP * uS_TO_S_FACTOR);
-  esp_sleep_enable_ext0_wakeup(GPIO_NUM_26,0);
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_13,0);
 
   pinMode(OUTA, INPUT);
   pinMode(OUTB, INPUT);
   pinMode(EncButton, INPUT_PULLUP);
+
+  delay(100);
+
+  dac_output_enable(DAC_CHANNEL);
+  dac_output_voltage(DAC_CHANNEL, 128);
 
   if(primerBoot)
   {    
@@ -141,6 +313,7 @@ if(wakeup_reason==ESP_SLEEP_WAKEUP_TIMER)
     digitalWrite(Buzzer, HIGH);
 
     // Espera a que llegue el mensaje para apagar
+    /*
     while (1) {
       if (datoRecibido == true) {
         digitalWrite(Buzzer, LOW);
@@ -149,16 +322,30 @@ if(wakeup_reason==ESP_SLEEP_WAKEUP_TIMER)
         datoRecibido = false;
         break;
       }
+      */
+
+      iniciarDAC();
+
+      while (audioReproduciendo)
+        {
+            reproducirAudio();
+        }
+      Sonido = false;
+
       delay(100);
+
+      dac_output_voltage(DAC_CHANNEL, 128);
+      dac_output_disable(DAC_CHANNEL);
     }
-  }
+  
+
   Arriba="Ten un";
   Abajo="Buen Dia";
   displayText();
   delay(3000);
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
   delay(100);
-  esp_sleep_enable_ext0_wakeup(GPIO_NUM_26,0);
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_13,0);
   delay(100);
   display.clearDisplay();
   display.display();
@@ -241,87 +428,4 @@ if(wakeup_reason==ESP_SLEEP_WAKEUP_TIMER)
   }
 
   delay(100);
-}
-
-
-void displaySetting()
-{
-  display.clearDisplay();
-  display.setTextSize(2);
-  display.setTextColor(SH110X_WHITE);
-  display.setCursor(0,0);
-  display.println("TIEMPO DE ALARMA:");
-  display.setCursor(0,32);
-  if(Minutos/10.0>=1.0)
-  display.println(String(Horas)+":"+String(Minutos));
-  else
-  display.println(String(Horas)+":0"+String(Minutos));
-  display.display();
-}
-
-void normalTime(){
-  if(Minutos>=60)
-  {
-    Horas++;
-    Minutos=Minutos-60;
-  }
-
-  if(Minutos<0 && Horas>=1)
-  {
-    Minutos=59;
-    Horas--;
-  }
-
-  if(Horas<0)
-  Horas=0;
-  if(Horas>23)
-  Horas=23;
-          
-  if(Minutos<=0 && Horas<=0)
-  Minutos=1;
-  }
-
-  void sumar(){
-    if(ModoHora)
-    Horas=Horas+cambio;
-    else
-    Minutos=Minutos+cambio;
-  }
-
-    void restar(){
-    if(ModoHora)
-    Horas--;
-    else
-    Minutos--;
-  }
-
-  void displayText()
-{
-  display.clearDisplay();
-  display.setTextSize(2);
-  display.setTextColor(SH110X_WHITE);
-  display.setCursor(10,0);
-  display.println(Arriba);
-  display.setCursor(10,32);
-  display.println(Abajo);
-  display.display();
-}
-
-int leerEncoder()
-{
-
-  int clk = digitalRead(OUTA);
-
-  if(clk != ultimoCLK)
-  {
-
-      ultimoCLK = clk;
-      if(digitalRead(OUTB)!=clk)
-        return -1;
-      else
-        return 1;
-    
-  }
-  ultimoCLK = clk;
-  return 0;
 }
