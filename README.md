@@ -1,0 +1,1 @@
+In this project I will be uploading the files necessary to create your own Two Parts Alarm, the alarm sounds in your room but the turn off button is somewhere else, so you have to stand upt, wake up and go press it
