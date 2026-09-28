@@ -9,4 +9,4 @@ I will be uploading a 2 version using RTC and Deep sleep so the system makes sur
 At the moment you select how much time you want to sleep, but with the RTC we will select the hour we want to wake up
 (like a normal Alarm)
 
-Saty tune for more, Link to my YouTube Channel: https://youtube.com/@pepeeldelsombrero4948?si=5MLOAAlol0celRQf
+Stay tune for more, Link to my YouTube Channel: https://youtube.com/@pepeeldelsombrero4948?si=5MLOAAlol0celRQf
